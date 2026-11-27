@@ -4,7 +4,7 @@ import { createLocalReplica, STORE_REPLICA, STORE_META } from './localReplica';
 import type { Sale, Shop } from '../types';
 import { uuid } from '../lib/uuid';
 
-function makeSale(shopId: string, total = 1000): Sale {
+function makeSale(shopId: string, total = 1000, createdAt = 0): Sale {
   return {
     id: uuid(),
     shopId,
@@ -13,7 +13,7 @@ function makeSale(shopId: string, total = 1000): Sale {
     totalPiastres: total,
     paidPiastres: total,
     method: 'cash',
-    createdAt: Date.now(),
+    createdAt,
     serverId: null,
   };
 }
@@ -57,9 +57,9 @@ describe('localReplica (IndexedDB)', () => {
   });
 
   it('lists sales newest first and scoped to one shop', async () => {
-    await replica.putSale(makeSale(shop.id, 100));
-    await replica.putSale(makeSale(shop.id, 200));
-    await replica.putSale(makeSale('other-shop', 999));
+    await replica.putSale(makeSale(shop.id, 100, 1_000));
+    await replica.putSale(makeSale(shop.id, 200, 2_000));
+    await replica.putSale(makeSale('other-shop', 999, 3_000));
 
     const sales = await replica.listSales(shop.id);
     expect(sales).toHaveLength(2);

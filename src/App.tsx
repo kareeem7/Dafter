@@ -15,14 +15,19 @@ import { NewSaleForm } from './components/NewSaleForm';
 import { SaleList } from './components/SaleList';
 import { ShopSetup } from './components/ShopSetup';
 import { DeadLetterPanel } from './components/DeadLetterPanel';
-import type { Sale, SaleItem } from './types';
+import { CustomersPanel, newCustomerId } from './components/CustomersPanel';
+import { DailyClosePanel } from './components/DailyClosePanel';
+import type { Sale, SaleItem, Customer, FieldState, DailyClose } from './types';
 import { uuid } from './lib/uuid';
+import { applyMutation, isSupabaseConfigured } from './lib/supabase';
 
 export default function App() {
   const replica = useMemo(() => createLocalReplica(), []);
   const [replicaReady, setReplicaReady] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
   const [sales, setSales] = useState<Sale[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [deviceId] = useState(() => {
     const existing = localStorage.getItem('dafter.device');
     if (existing) return existing;
@@ -35,22 +40,33 @@ export default function App() {
 
   const { state, flushNow, setSender } = useSyncEngine(outbox);
 
-  useEffect(() => {
-    void (async () => {
-      await replica.open();
-      await outbox.load();
-      const shop = await replica.getShop();
-      if (shop) setShopName(shop.name);
-      await refreshSales();
-      setReplicaReady(true);
-    })();
-  }, [replica, outbox]);
-
   const refreshSales = useCallback(async () => {
     const shop = await replica.getShop();
     if (!shop) return;
     setSales(await replica.listSales(shop.id));
+    setCustomers(await replica.listCustomers(shop.id));
   }, [replica]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        await replica.open();
+        await outbox.load();
+        const shop = await replica.getShop();
+        if (shop && !cancelled) setShopName(shop.name);
+        await refreshSales();
+        if (!cancelled) setReplicaReady(true);
+      } catch (error) {
+        // Surface the failure instead of hanging on "جارٍ التحميل" forever.
+        setInitError(error instanceof Error ? error.message : String(error));
+        setReplicaReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [replica, outbox, refreshSales]);
 
   const handleShopCreated = useCallback(
     async (name: string) => {
@@ -92,21 +108,99 @@ export default function App() {
     [outbox, replica, refreshSales, shopName],
   );
 
-  // Sender: posts outbox entries to the server. Without a configured backend
-  // this simulates a transient offline failure so the queue behavior is
-  // visible in the demo; with a backend it's a real RPC call.
+  const createCustomer = useCallback(
+    async (name: string, phone: string) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const now = Date.now();
+      const fields: Record<string, FieldState> = {
+        name: { value: name, updatedAt: now, device: deviceId },
+        phone: { value: phone, updatedAt: now, device: deviceId },
+        balancePiastres: { value: 0, updatedAt: now, device: deviceId },
+      };
+      const customer: Customer = { id: newCustomerId(), shopId: shop.id, fields, createdAt: now };
+      await replica.putCustomer(customer);
+      await outbox.enqueue('customer.create', { customerId: customer.id, shopId: shop.id, name, phone, fields });
+      await refreshSales();
+    },
+    [deviceId, outbox, replica, refreshSales, shopName],
+  );
+
+  const patchCustomer = useCallback(
+    async (customerId: string, patch: Record<string, FieldState>) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const existing = await replica.listCustomers(shop.id);
+      const customer = existing.find((c) => c.id === customerId);
+      if (!customer) return;
+      const updated = { ...customer, fields: { ...customer.fields, ...patch } };
+      await replica.putCustomer(updated);
+      await outbox.enqueue('customer.patch', { customerId, fields: patch });
+      await refreshSales();
+    },
+    [outbox, replica, refreshSales, shopName],
+  );
+
+  const closeDay = useCallback(
+    async (openingPiastres: number) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const now = new Date();
+      const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const todays = sales.filter((sale) => {
+        const d = new Date(sale.createdAt);
+        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+      });
+      const salesTotal = todays.reduce((sum, s) => sum + s.totalPiastres, 0);
+      const cashIn = todays.filter((s) => s.method === 'cash').reduce((sum, s) => sum + s.totalPiastres, 0);
+      const close: DailyClose = {
+        id: uuid(),
+        shopId: shop.id,
+        day,
+        openingPiastres,
+        salesTotalPiastres: salesTotal,
+        returnsTotalPiastres: 0,
+        cashPiastres: openingPiastres + cashIn,
+        createdAt: Date.now(),
+      };
+      await replica.putClose(close);
+      await outbox.enqueue('close.create', {
+        closeId: close.id,
+        day,
+        openingPiastres,
+        salesTotalPiastres: salesTotal,
+        returnsTotalPiastres: 0,
+        cashPiastres: close.cashPiastres,
+      });
+      await refreshSales();
+    },
+    [outbox, replica, refreshSales, sales, shopName],
+  );
+
+  // Sender: posts outbox entries to the server via apply_mutation RPC.
+  // When Supabase is configured, this is the real, idempotent write path.
+  // When it isn't, we simulate a transient failure so the offline queue
+  // behavior stays visible in the demo.
   useEffect(() => {
     setSender(async (entry) => {
-      // Simulate the network being the optional part: if offline, fail transiently.
-      if (!navigator.onLine) {
-        throw new Error('offline');
+      if (!isSupabaseConfigured) {
+        if (!navigator.onLine) throw new Error('offline');
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return;
       }
-      // When online and a backend exists, this is where apply_mutation RPC runs.
-      // For the offline demo we resolve immediately once online.
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      void entry;
+      const shop = await replica.getShop();
+      if (!shop) throw new Error('no shop');
+      await applyMutation({
+        shopId: shop.id,
+        mutationId: entry.id,
+        type: entry.type,
+        payload: entry.payload,
+      });
     });
-  }, [setSender]);
+  }, [setSender, replica]);
 
   useEffect(() => {
     if (replicaReady && navigator.onLine && outbox.getPending().length > 0) {
@@ -130,7 +224,20 @@ export default function App() {
         <SyncBadge state={state} />
       </header>
 
-      {!replicaReady ? (
+      {initError ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl bg-danger-soft p-6 text-center ring-1 ring-danger-500/30">
+          <p className="text-4xl">⚠️</p>
+          <h2 className="text-lg font-black text-danger-500">تعذّر الاتصال بقاعدة البيانات</h2>
+          <p className="max-w-xs text-sm text-ink-soft">{initError}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-500/30"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : !replicaReady ? (
         <div className="flex flex-1 items-center justify-center text-ink-soft">جارٍ التحميل…</div>
       ) : !shopName ? (
         <ShopSetup onCreate={handleShopCreated} />
@@ -148,7 +255,11 @@ export default function App() {
 
           <NewSaleForm onSubmit={recordSale} disabled={!shopName} />
 
+          <CustomersPanel customers={customers} onCreate={createCustomer} onPatch={patchCustomer} />
+
           <SaleList sales={sales} />
+
+          <DailyClosePanel sales={sales} onClose={closeDay} />
 
           <DeadLetterPanel outbox={outbox} online={state.online} onRetry={() => void flushNow()} />
         </main>

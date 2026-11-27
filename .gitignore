@@ -9,3 +9,5 @@ dist-ssr
 coverage
 playwright-report
 test-results
+.pr-body.md
+.pr-body.md
