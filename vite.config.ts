@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite';
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Relative base so the built site works on any static host and any
+  // sub-path (GitHub Pages project site, Cloudflare Pages, etc.) —
+  // absolute "/assets/..." links would 404 and render a blank page.
+  base: './',
   plugins: [react(), tailwindcss()],
   server: {
     host: '0.0.0.0',
