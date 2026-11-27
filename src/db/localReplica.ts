@@ -16,6 +16,7 @@ const DB_NAME = 'dafter';
 const DB_VERSION = 1;
 
 export const STORE_REPLICA = 'replica';
+export const STORE_OUTBOX = 'outbox';
 export const STORE_META = 'meta';
 
 type ReplicaRecord =
@@ -49,6 +50,9 @@ class IndexedDBReplica implements LocalReplica {
         const db = request.result;
         if (!db.objectStoreNames.contains(STORE_REPLICA)) {
           db.createObjectStore(STORE_REPLICA, { keyPath: 'id' });
+        }
+        if (!db.objectStoreNames.contains(STORE_OUTBOX)) {
+          db.createObjectStore(STORE_OUTBOX);
         }
         if (!db.objectStoreNames.contains(STORE_META)) {
           db.createObjectStore(STORE_META);

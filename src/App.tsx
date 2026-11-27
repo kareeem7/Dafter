@@ -17,10 +17,12 @@ import { ShopSetup } from './components/ShopSetup';
 import { DeadLetterPanel } from './components/DeadLetterPanel';
 import type { Sale, SaleItem } from './types';
 import { uuid } from './lib/uuid';
+import { applyMutation, isSupabaseConfigured } from './lib/supabase';
 
 export default function App() {
   const replica = useMemo(() => createLocalReplica(), []);
   const [replicaReady, setReplicaReady] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
   const [sales, setSales] = useState<Sale[]>([]);
   const [deviceId] = useState(() => {
@@ -35,22 +37,32 @@ export default function App() {
 
   const { state, flushNow, setSender } = useSyncEngine(outbox);
 
-  useEffect(() => {
-    void (async () => {
-      await replica.open();
-      await outbox.load();
-      const shop = await replica.getShop();
-      if (shop) setShopName(shop.name);
-      await refreshSales();
-      setReplicaReady(true);
-    })();
-  }, [replica, outbox]);
-
   const refreshSales = useCallback(async () => {
     const shop = await replica.getShop();
     if (!shop) return;
     setSales(await replica.listSales(shop.id));
   }, [replica]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        await replica.open();
+        await outbox.load();
+        const shop = await replica.getShop();
+        if (shop && !cancelled) setShopName(shop.name);
+        await refreshSales();
+        if (!cancelled) setReplicaReady(true);
+      } catch (error) {
+        // Surface the failure instead of hanging on "جارٍ التحميل" forever.
+        setInitError(error instanceof Error ? error.message : String(error));
+        setReplicaReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [replica, outbox, refreshSales]);
 
   const handleShopCreated = useCallback(
     async (name: string) => {
@@ -92,21 +104,27 @@ export default function App() {
     [outbox, replica, refreshSales, shopName],
   );
 
-  // Sender: posts outbox entries to the server. Without a configured backend
-  // this simulates a transient offline failure so the queue behavior is
-  // visible in the demo; with a backend it's a real RPC call.
+  // Sender: posts outbox entries to the server via apply_mutation RPC.
+  // When Supabase is configured, this is the real, idempotent write path.
+  // When it isn't, we simulate a transient failure so the offline queue
+  // behavior stays visible in the demo.
   useEffect(() => {
     setSender(async (entry) => {
-      // Simulate the network being the optional part: if offline, fail transiently.
-      if (!navigator.onLine) {
-        throw new Error('offline');
+      if (!isSupabaseConfigured) {
+        if (!navigator.onLine) throw new Error('offline');
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        return;
       }
-      // When online and a backend exists, this is where apply_mutation RPC runs.
-      // For the offline demo we resolve immediately once online.
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      void entry;
+      const shop = await replica.getShop();
+      if (!shop) throw new Error('no shop');
+      await applyMutation({
+        shopId: shop.id,
+        mutationId: entry.id,
+        type: entry.type,
+        payload: entry.payload,
+      });
     });
-  }, [setSender]);
+  }, [setSender, replica]);
 
   useEffect(() => {
     if (replicaReady && navigator.onLine && outbox.getPending().length > 0) {
@@ -130,7 +148,20 @@ export default function App() {
         <SyncBadge state={state} />
       </header>
 
-      {!replicaReady ? (
+      {initError ? (
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl bg-danger-soft p-6 text-center ring-1 ring-danger-500/30">
+          <p className="text-4xl">⚠️</p>
+          <h2 className="text-lg font-black text-danger-500">تعذّر الاتصال بقاعدة البيانات</h2>
+          <p className="max-w-xs text-sm text-ink-soft">{initError}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-2 rounded-xl bg-brand-500 px-5 py-2.5 text-sm font-bold text-white shadow-lg shadow-brand-500/30"
+          >
+            إعادة المحاولة
+          </button>
+        </div>
+      ) : !replicaReady ? (
         <div className="flex flex-1 items-center justify-center text-ink-soft">جارٍ التحميل…</div>
       ) : !shopName ? (
         <ShopSetup onCreate={handleShopCreated} />
