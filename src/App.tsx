@@ -15,7 +15,8 @@ import { NewSaleForm } from './components/NewSaleForm';
 import { SaleList } from './components/SaleList';
 import { ShopSetup } from './components/ShopSetup';
 import { DeadLetterPanel } from './components/DeadLetterPanel';
-import type { Sale, SaleItem } from './types';
+import { CustomersPanel, newCustomerId } from './components/CustomersPanel';
+import type { Sale, SaleItem, Customer, FieldState } from './types';
 import { uuid } from './lib/uuid';
 import { applyMutation, isSupabaseConfigured } from './lib/supabase';
 
@@ -25,6 +26,7 @@ export default function App() {
   const [initError, setInitError] = useState<string | null>(null);
   const [shopName, setShopName] = useState('');
   const [sales, setSales] = useState<Sale[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [deviceId] = useState(() => {
     const existing = localStorage.getItem('dafter.device');
     if (existing) return existing;
@@ -41,6 +43,7 @@ export default function App() {
     const shop = await replica.getShop();
     if (!shop) return;
     setSales(await replica.listSales(shop.id));
+    setCustomers(await replica.listCustomers(shop.id));
   }, [replica]);
 
   useEffect(() => {
@@ -99,6 +102,41 @@ export default function App() {
       await outbox.enqueue('sale.create', { saleId: sale.id, type: 'sale.create', device: deviceId });
 
       // 2. UI confirms instantly, regardless of connectivity.
+      await refreshSales();
+    },
+    [outbox, replica, refreshSales, shopName],
+  );
+
+  const createCustomer = useCallback(
+    async (name: string, phone: string) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const now = Date.now();
+      const fields: Record<string, FieldState> = {
+        name: { value: name, updatedAt: now, device: deviceId },
+        phone: { value: phone, updatedAt: now, device: deviceId },
+        balancePiastres: { value: 0, updatedAt: now, device: deviceId },
+      };
+      const customer: Customer = { id: newCustomerId(), shopId: shop.id, fields, createdAt: now };
+      await replica.putCustomer(customer);
+      await outbox.enqueue('customer.create', { customerId: customer.id, shopId: shop.id, name, phone, fields });
+      await refreshSales();
+    },
+    [deviceId, outbox, replica, refreshSales, shopName],
+  );
+
+  const patchCustomer = useCallback(
+    async (customerId: string, patch: Record<string, FieldState>) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const existing = await replica.listCustomers(shop.id);
+      const customer = existing.find((c) => c.id === customerId);
+      if (!customer) return;
+      const updated = { ...customer, fields: { ...customer.fields, ...patch } };
+      await replica.putCustomer(updated);
+      await outbox.enqueue('customer.patch', { customerId, fields: patch });
       await refreshSales();
     },
     [outbox, replica, refreshSales, shopName],
@@ -178,6 +216,8 @@ export default function App() {
           </section>
 
           <NewSaleForm onSubmit={recordSale} disabled={!shopName} />
+
+          <CustomersPanel customers={customers} onCreate={createCustomer} onPatch={patchCustomer} />
 
           <SaleList sales={sales} />
 
