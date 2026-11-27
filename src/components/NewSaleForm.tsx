@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { SaleItem } from '../types';
-import { formatPiastres, parseEgpToPiastres } from '../lib/money';
+import { formatPiastres, parseEgpToPiastres, tryParseEgpToPiastres } from '../lib/money';
 
 interface NewSaleFormProps {
   onSubmit: (items: SaleItem[], method: 'cash' | 'debt', customerId: string | null) => void | Promise<void>;
@@ -18,6 +18,12 @@ export function NewSaleForm({ onSubmit, disabled }: NewSaleFormProps) {
   const [method, setMethod] = useState<'cash' | 'debt'>('cash');
 
   const updateLine = (id: string, field: 'name' | 'qty' | 'price', value: string) => {
+    if (field === 'price') {
+      // Only digits and a single dot — reject letters/anything else.
+      const cleaned = value.replace(/[^\d.]/g, '');
+      setLines((prev) => prev.map((line) => (line.id === id ? { ...line, [field]: cleaned } : line)));
+      return;
+    }
     setLines((prev) => prev.map((line) => (line.id === id ? { ...line, [field]: value } : line)));
   };
 
@@ -31,7 +37,8 @@ export function NewSaleForm({ onSubmit, disabled }: NewSaleFormProps) {
 
   const totalPiastres = lines.reduce((sum, line) => {
     if (!line.price) return sum;
-    return sum + parseEgpToPiastres(line.price || '0') * (Number(line.qty) || 0);
+    // Safe parse for live calculation — invalid input returns 0, never throws.
+    return sum + tryParseEgpToPiastres(line.price) * (Number(line.qty) || 0);
   }, 0);
 
   const valid = lines.every((line) => line.name.trim() && line.price);
