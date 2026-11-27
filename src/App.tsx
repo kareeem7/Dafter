@@ -20,6 +20,7 @@ import { DailyClosePanel } from './components/DailyClosePanel';
 import type { Sale, SaleItem, Customer, FieldState, DailyClose } from './types';
 import { uuid } from './lib/uuid';
 import { applyMutation, isSupabaseConfigured } from './lib/supabase';
+import { seedDemoData } from './lib/demoSeed';
 
 export default function App() {
   const replica = useMemo(() => createLocalReplica(), []);
@@ -28,6 +29,7 @@ export default function App() {
   const [shopName, setShopName] = useState('');
   const [sales, setSales] = useState<Sale[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const [demoMode, setDemoMode] = useState(false);
   const [deviceId] = useState(() => {
     const existing = localStorage.getItem('dafter.device');
     if (existing) return existing;
@@ -55,6 +57,17 @@ export default function App() {
         await outbox.load();
         const shop = await replica.getShop();
         if (shop && !cancelled) setShopName(shop.name);
+
+        // Direct demo access via ?demo in the URL — seed and go straight in.
+        if (!shop && new URLSearchParams(window.location.search).has('demo') && !cancelled) {
+          await seedDemoData(replica, outbox);
+          const seeded = await replica.getShop();
+          if (seeded && !cancelled) {
+            setShopName(seeded.name);
+            setDemoMode(true);
+          }
+        }
+
         await refreshSales();
         if (!cancelled) setReplicaReady(true);
       } catch (error) {
@@ -78,6 +91,17 @@ export default function App() {
     },
     [replica, refreshSales],
   );
+
+  const handleStartDemo = useCallback(async () => {
+    await seedDemoData(replica, outbox);
+    const shop = await replica.getShop();
+    if (shop) {
+      localStorage.setItem('dafter.shop', shop.id);
+      setShopName(shop.name);
+      setDemoMode(true);
+      await refreshSales();
+    }
+  }, [outbox, replica, refreshSales]);
 
   const recordSale = useCallback(
     async (items: SaleItem[], method: Sale['method'], customerId: string | null) => {
@@ -217,7 +241,14 @@ export default function App() {
             د
           </div>
           <div>
-            <h1 className="text-xl font-black leading-tight">دفتر</h1>
+            <h1 className="text-xl font-black leading-tight">
+              دفتر
+              {demoMode && (
+                <span className="ml-2 rounded-full bg-amber-soft px-2 py-0.5 text-[10px] font-black text-amber-600">
+                  ديمو
+                </span>
+              )}
+            </h1>
             <p className="text-xs text-ink-soft">سجل لا يفقد صفقة حتى لو انقطع الإنترنت</p>
           </div>
         </div>
@@ -240,7 +271,7 @@ export default function App() {
       ) : !replicaReady ? (
         <div className="flex flex-1 items-center justify-center text-ink-soft">جارٍ التحميل…</div>
       ) : !shopName ? (
-        <ShopSetup onCreate={handleShopCreated} />
+        <ShopSetup onCreate={handleShopCreated} onStartDemo={handleStartDemo} />
       ) : (
         <main className="flex flex-1 flex-col gap-5">
           {/* Today at a glance */}

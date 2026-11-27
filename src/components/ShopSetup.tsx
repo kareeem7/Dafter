@@ -1,7 +1,13 @@
 import { useState } from 'react';
 
 /** First-run shop creation. One shop per device in v1. */
-export function ShopSetup({ onCreate }: { onCreate: (name: string) => void | Promise<void> }) {
+export function ShopSetup({
+  onCreate,
+  onStartDemo,
+}: {
+  onCreate: (name: string) => void | Promise<void>;
+  onStartDemo?: () => void | Promise<void>;
+}) {
   const [name, setName] = useState('');
   const [error, setError] = useState('');
 
@@ -44,6 +50,25 @@ export function ShopSetup({ onCreate }: { onCreate: (name: string) => void | Pro
         >
           بدء العمل
         </button>
+
+        {onStartDemo && (
+          <>
+            <div className="my-1 flex items-center gap-3 text-xs text-ink-faint">
+              <span className="h-px flex-1 bg-line" /> أو
+              <span className="h-px flex-1 bg-line" />
+            </div>
+            <button
+              type="button"
+              onClick={() => void onStartDemo()}
+              className="w-full rounded-xl bg-white px-4 py-3.5 text-base font-bold text-brand-700 ring-1 ring-brand-200 transition active:scale-[0.98] hover:bg-brand-50"
+            >
+              ✨ ابدأ تجربة الديمو
+            </button>
+            <p className="text-center text-[11px] text-ink-faint">
+              يعمل الموقع معبّأ بمحل ومبيعات وعملاء وديون جاهزة للتجربة فورًا.
+            </p>
+          </>
+        )}
       </form>
     </main>
   );
