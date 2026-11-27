@@ -21,6 +21,7 @@ import type { Sale, SaleItem, Customer, FieldState, DailyClose } from './types';
 import { uuid } from './lib/uuid';
 import { applyMutation, isSupabaseConfigured } from './lib/supabase';
 import { seedDemoData } from './lib/demoSeed';
+import { formatPiastres } from './lib/money';
 
 export default function App() {
   const replica = useMemo(() => createLocalReplica(), []);
@@ -278,8 +279,9 @@ export default function App() {
           <section className="animate-fade-up rounded-2xl bg-white p-5 shadow-sm ring-1 ring-line">
             <h2 className="mb-3 text-sm font-bold text-ink-soft">مبيعات اليوم</h2>
             <div className="nums text-3xl font-black text-brand-600">
-              {sales.filter((sale) => isToday(sale.createdAt)).reduce((sum, sale) => sum + sale.totalPiastres, 0).toLocaleString('en-US')}{' '}
-              <span className="text-base font-bold text-ink-soft">ج.م (فئة)</span>
+              {formatPiastres(
+                sales.filter((sale) => isToday(sale.createdAt)).reduce((sum, sale) => sum + sale.totalPiastres, 0),
+              )}{' '}
             </div>
             <p className="mt-1 text-xs text-ink-faint">{sales.filter((sale) => isToday(sale.createdAt)).length} صفقة حتى الآن</p>
           </section>
