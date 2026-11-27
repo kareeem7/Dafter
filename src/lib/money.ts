@@ -16,6 +16,21 @@ export function parseEgpToPiastres(input: string): number {
   return wholePiastres + fractionPiastres;
 }
 
+/**
+ * Safe variant — returns 0 for invalid input instead of throwing.
+ * Use this for live/intermediate calculations (e.g. recalculating a total
+ * while the user is typing) where invalid input shouldn't crash the render.
+ * The strict parseEgpToPiastres stays for the commit path (submit), where
+ * invalid input is validated explicitly before use.
+ */
+export function tryParseEgpToPiastres(input: string): number {
+  try {
+    return parseEgpToPiastres(input);
+  } catch {
+    return 0;
+  }
+}
+
 /** Format integer piastres as "1,234.56 ج.م". Never produces float math. */
 export function formatPiastres(piastres: number): string {
   if (!Number.isInteger(piastres)) {

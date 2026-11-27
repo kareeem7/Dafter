@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPiastres, parseEgpToPiastres, sumPiastres } from './money';
+import { formatPiastres, parseEgpToPiastres, sumPiastres, tryParseEgpToPiastres } from './money';
 
 describe('money (integer piastres only)', () => {
   it('parses EGP strings to integer piastres', () => {
@@ -13,6 +13,13 @@ describe('money (integer piastres only)', () => {
     expect(() => parseEgpToPiastres('abc')).toThrow();
     expect(() => parseEgpToPiastres('1.234')).toThrow();
     expect(() => parseEgpToPiastres('')).toThrow();
+  });
+
+  it('tryParse returns 0 for invalid input instead of throwing (safe for live calc)', () => {
+    expect(tryParseEgpToPiastres('abc')).toBe(0);
+    expect(tryParseEgpToPiastres('1.234')).toBe(0);
+    expect(tryParseEgpToPiastres('')).toBe(0);
+    expect(tryParseEgpToPiastres('12.5')).toBe(1250);
   });
 
   it('formats piastres back to EGP without float drift', () => {
