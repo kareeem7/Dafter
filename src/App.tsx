@@ -16,7 +16,8 @@ import { SaleList } from './components/SaleList';
 import { ShopSetup } from './components/ShopSetup';
 import { DeadLetterPanel } from './components/DeadLetterPanel';
 import { CustomersPanel, newCustomerId } from './components/CustomersPanel';
-import type { Sale, SaleItem, Customer, FieldState } from './types';
+import { DailyClosePanel } from './components/DailyClosePanel';
+import type { Sale, SaleItem, Customer, FieldState, DailyClose } from './types';
 import { uuid } from './lib/uuid';
 import { applyMutation, isSupabaseConfigured } from './lib/supabase';
 
@@ -142,6 +143,43 @@ export default function App() {
     [outbox, replica, refreshSales, shopName],
   );
 
+  const closeDay = useCallback(
+    async (openingPiastres: number) => {
+      if (!shopName) return;
+      const shop = await replica.getShop();
+      if (!shop) return;
+      const now = new Date();
+      const day = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+      const todays = sales.filter((sale) => {
+        const d = new Date(sale.createdAt);
+        return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+      });
+      const salesTotal = todays.reduce((sum, s) => sum + s.totalPiastres, 0);
+      const cashIn = todays.filter((s) => s.method === 'cash').reduce((sum, s) => sum + s.totalPiastres, 0);
+      const close: DailyClose = {
+        id: uuid(),
+        shopId: shop.id,
+        day,
+        openingPiastres,
+        salesTotalPiastres: salesTotal,
+        returnsTotalPiastres: 0,
+        cashPiastres: openingPiastres + cashIn,
+        createdAt: Date.now(),
+      };
+      await replica.putClose(close);
+      await outbox.enqueue('close.create', {
+        closeId: close.id,
+        day,
+        openingPiastres,
+        salesTotalPiastres: salesTotal,
+        returnsTotalPiastres: 0,
+        cashPiastres: close.cashPiastres,
+      });
+      await refreshSales();
+    },
+    [outbox, replica, refreshSales, sales, shopName],
+  );
+
   // Sender: posts outbox entries to the server via apply_mutation RPC.
   // When Supabase is configured, this is the real, idempotent write path.
   // When it isn't, we simulate a transient failure so the offline queue
@@ -220,6 +258,8 @@ export default function App() {
           <CustomersPanel customers={customers} onCreate={createCustomer} onPatch={patchCustomer} />
 
           <SaleList sales={sales} />
+
+          <DailyClosePanel sales={sales} onClose={closeDay} />
 
           <DeadLetterPanel outbox={outbox} online={state.online} onRetry={() => void flushNow()} />
         </main>
